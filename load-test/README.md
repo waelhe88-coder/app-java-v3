@@ -132,4 +132,10 @@ sharing, and data volume all move the absolute values. The methodology
   scenario set once observability (A1) makes the miss/hit split visible.
 - **Phase C (replicas)**: the C-phase decision now has its baseline
   number — a second replica is justified only when sustained load
-  approaches ~1200 rps on equivalent hardware.
+  approaches ~1200 rps on equivalent hardware. **Readiness is proven,
+  not assumed**: `MultiReplicaReadinessIntegrationTest` (PR #234) boots
+  two full application contexts against the same PostgreSQL + Redis and
+  pins the cross-replica invariants (rolling-deploy boot, login-flow
+  failover through the shared session/SAS state and JKS keystore,
+  cross-instance cache serve) in CI — the replica count itself stays a
+  user/platform (paid) decision behind this measured number.
