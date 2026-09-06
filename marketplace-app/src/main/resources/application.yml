@@ -229,6 +229,14 @@ logging:
       file: logstash
   file:
     name: ${LOG_FILE:/var/log/marketplace/application.log}
+  logback:
+    rollingpolicy:
+      # Official Spring Boot keys — reference page cached at scripts/ops-phase-a/boot-logging-official.html
+      file-name-pattern: ${LOG_FILE:/var/log/marketplace/application}.%d{yyyy-MM-dd}.%i.gz
+      max-file-size: 50MB
+      max-history: 14
+      total-size-cap: 2GB
+      clean-history-on-start: true
   pattern:
     correlation: "[${correlationId:-}]"
   level:

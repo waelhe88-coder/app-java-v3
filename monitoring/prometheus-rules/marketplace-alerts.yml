@@ -1,0 +1,101 @@
+# Alert rules for the marketplace platform (Phase A of the observability gap closure).
+#
+# Consumption: loaded by the operator's Prometheus instance (rule_files). This
+# repository does not provision a Prometheus/Alertmanager instance — the wiring
+# decision is an operator gate, see docs/observability/slo.md §5.
+#
+# Contract guards (enforced by marketplace-app test com.marketplace.config.AlertRulesYamlTest):
+#   - every rule carries alert/expr/for/labels.severity/annotations.summary/description
+#   - every metric referenced by an expr is proven to exist at runtime (whitelist
+#     with file:line provenance documented in docs/observability/slo.md §4)
+#   - keep expr values single-line (the guard test parses them line-wise)
+#
+# Thresholds are initial values — calibration against real traffic is documented
+# in docs/observability/slo.md §6.
+groups:
+  - name: marketplace-availability
+    rules:
+      - alert: MarketplaceTargetDown
+        # Single-target loss: fires per matching target that is scraped and down.
+        expr: up{job=~".*marketplace.*"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus cannot scrape the marketplace service"
+          description: "Scrape target {{ $labels.job }} has been unreachable for 5 minutes."
+          slo: "docs/observability/slo.md#2-slo-1"
+      - alert: MarketplaceTargetAbsent
+        # Complete target loss: when service discovery removes EVERY matching
+        # target the == 0 branch above returns an empty vector, so absent() is
+        # the only signal. It emits a synthetic series WITHOUT a job label
+        # (regex matcher → no label derivation, official semantics), hence a
+        # separate alert with no {{ $labels.job }} interpolation.
+        expr: absent(up{job=~".*marketplace.*"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "All marketplace scrape targets absent from service discovery"
+          description: "No up series matched the marketplace job filter for 5 minutes - complete target loss (deployment crash, discovery drift, or job filter mismatch)."
+          slo: "docs/observability/slo.md#2-slo-1"
+      - alert: MarketplaceHttp5xxRateHigh
+        expr: sum(rate(http_server_requests_seconds_count{status=~"5.."}[10m])) / sum(rate(http_server_requests_seconds_count[10m])) > 0.02
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HTTP 5xx rate above 2% for 10 minutes"
+          description: "5xx ratio is {{ $value | humanizePercentage }} — SLO-1 availability error budget at risk."
+          slo: "docs/observability/slo.md#2-slo-1"
+  - name: marketplace-business
+    rules:
+      - alert: MarketplacePaymentsFailing
+        expr: sum(increase(marketplace_payments_failed_total[15m])) > 3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 3 payments failed within 15 minutes"
+          description: "Failed payments in the last 15m: {{ $value }} — SLO-2 payment success at risk."
+          slo: "docs/observability/slo.md#3-slo-2"
+  - name: marketplace-eventbus
+    rules:
+      - alert: MarketplaceEventBusStale
+        expr: marketplace_eventbus_stale > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Modulith event bus has stale publications"
+          description: "{{ $value }} event publications incomplete for over 6h — downstream modules (ledger, booking, notifications) are drifting."
+          slo: "docs/observability/slo.md#4-slo-3"
+  - name: marketplace-guardrails
+    rules:
+      - alert: MarketplaceCacheInvalidationFailures
+        expr: sum(increase(marketplace_cache_invalidation_evict_failure_total[15m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Repeated cache-invalidation relay failures"
+          description: "Best-effort eviction failed {{ $value }} times in 15m — multi-instance cache consistency at risk."
+          slo: "docs/observability/slo.md#5-guardrails"
+      - alert: MarketplaceCircuitBreakerOpen
+        expr: resilience4j_circuitbreaker_state{state="open"} == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit breaker open for more than 2 minutes"
+          description: "Circuit breaker {{ $labels.name }} is OPEN — the guarded dependency path keeps failing."
+          slo: "docs/observability/slo.md#5-guardrails"
+      - alert: MarketplaceDbPoolSaturated
+        expr: hikaricp_connections_active / hikaricp_connections_max > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hikari connection pool above 90%"
+          description: "Active/max connections is {{ $value | humanizePercentage }} for 5 minutes."
+          slo: "docs/observability/slo.md#5-guardrails"
