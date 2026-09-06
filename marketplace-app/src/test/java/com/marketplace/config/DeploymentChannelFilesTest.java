@@ -54,6 +54,21 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       repository has disabled issues"). Incident management must stay
  *       confined to upstream (waelhe/app-java-v3) — dropping the guard
  *       reintroduces a permanently red deployment channel.</li>
+ *   <li><b>the workflow-file platform gate</b> — measured live 2026-09-06
+ *       (failed fork-sync run 34038982156): merge-upstream answers HTTP 422
+ *       "refusing to allow a GitHub App to create or update workflow
+ *       ... without `workflows` permission" whenever the upstream diff
+ *       touches a workflow file (first case: #242's maven-publish.yml
+ *       CI gate). The GITHUB_TOKEN cannot be granted that permission: the
+ *       workflow {@code permissions:} key's official scope list
+ *       (workflow-syntax#permissions; the standard workflow schema agrees)
+ *       has no {@code workflows} value. Generalized channel rule: all
+ *       non-workflow diffs flow autonomously; a workflow-file diff is the
+ *       bootstrap class — its only delivery path is a one-time manual
+ *       Sync fork by the fork owner, keeping the channel itself
+ *       credential-free. The blocked run must fail loudly WITH that
+ *       explanation (a silent swallow or a red mystery both cost the
+ *       same manual debugging this repo is being cleaned of).</li>
  *   <li><b>channel freshness alarm</b> — a dead sync (60-day
  *       scheduled-workflow disablement, permission loss, divergence) leaves
  *       production serving stale code with every HTTP probe green. The
@@ -126,6 +141,38 @@ class DeploymentChannelFilesTest {
                         + "the sync's push must not re-run the fork's CI")
                 .doesNotContain("pull_request:")
                 .doesNotContain("\n  push:");
+    }
+
+    @Test
+    void syncExplainsTheWorkflowFilePlatformGateWhenItBlocksTheChannel() throws IOException {
+        String yml = read(".github/workflows/fork-sync.yml");
+        assertThat(yml).as("the measured platform gate (2026-09-06, failed run "
+                        + "34038982156): merge-upstream answers 422 'without "
+                        + "`workflows` permission' on any workflow-file diff — "
+                        + "the detection branch must stay")
+                .contains("if [ \"$http_code\" = \"422\" ] && echo \"$message\" | grep -q 'without .workflows. permission'; then");
+        assertThat(yml).as("the blocked run must state the delivery path, not "
+                        + "fail as a red mystery: a one-time manual Sync fork "
+                        + "by the fork owner carries workflow-file diffs (the "
+                        + "bootstrap class); everything else keeps flowing "
+                        + "autonomously")
+                .contains("a one-time manual Sync fork by the fork owner")
+                .contains("every other diff keeps flowing autonomously");
+        assertThat(yml).as("the gate explanation must stay grounded in the "
+                        + "official scope list — the workflow permissions key "
+                        + "has no workflows value (workflow-syntax#permissions)")
+                .contains("the permissions key has no workflows scope");
+        assertThat(yml).as("the run must keep failing (red) while blocked: the "
+                        + "channel is genuinely stuck until the manual sync "
+                        + "lands — a success would hide a stale production "
+                        + "behind green runs")
+                .contains("This run stays red by design until the manual sync lands");
+        assertThat(yml).as("the header must state the generalized channel rule "
+                        + "(workflow-file diffs are the recurring bootstrap "
+                        + "class) — the old 'stays current forever' claim was "
+                        + "falsified by the measured gate")
+                .contains("Workflow-file diffs are the recurring")
+                .contains("bootstrap class");
     }
 
     @Test

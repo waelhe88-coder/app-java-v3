@@ -43,8 +43,12 @@ name: Deployment Channel Sync
 # watchdog's freshness probe is the cross-repo alarm for a stuck or dead
 # sync (see .github/workflows/watchdog.yml).
 #
-# One-time bootstrap: this file reaches the fork through a sync itself —
-# the final manual one. From that point on the fork stays current forever.
+# Bootstrap: this file reaches the fork through a sync itself — the
+# final manual one. From that point on every NON-workflow-file diff flows
+# to the fork autonomously. Workflow-file diffs are the recurring
+# bootstrap class: the GITHUB_TOKEN cannot update workflow files at all
+# (measured platform gate below), so each upstream change that touches
+# .github/workflows/* needs one manual "Sync fork" by the fork owner.
 
 on:
   schedule:
@@ -89,6 +93,30 @@ jobs:
           echo "$body"
           message=$(echo "$body" | jq -r '.message // empty' 2>/dev/null || true)
           merge_type=$(echo "$body" | jq -r '.merge_type // empty' 2>/dev/null || true)
+          # Platform gate (measured live 2026-09-06, failed run 34038982156):
+          # the GITHUB_TOKEN is a GitHub App installation token, and GitHub
+          # refuses to let any GitHub App token create or update workflow
+          # files without the `workflows` App permission — a permission the
+          # workflow `permissions:` key CANNOT grant: the official scope
+          # list (workflow-syntax#permissions — the standard workflow schema
+          # agrees) has no `workflows` value. The first upstream change that
+          # carried a workflow-file diff (#242's maven-publish.yml gate)
+          # therefore failed with:
+          #   HTTP 422 "refusing to allow a GitHub App to create or update
+          #   workflow `.github/workflows/maven-publish.yml` without
+          #   `workflows` permission"
+          # Generalized channel rule: every diff EXCEPT workflow files keeps
+          # flowing autonomously through this workflow; a workflow-file diff
+          # is the bootstrap class — its only delivery path is a one-time
+          # manual "Sync fork" by the fork owner (no PAT, no secret: the
+          # channel itself stays credential-free by design). The run stays
+          # red on purpose: the channel is genuinely blocked until that sync
+          # lands, and the upstream watchdog's freshness probe is the
+          # cross-repo alarm (opens the incident, auto-closes on recovery).
+          if [ "$http_code" = "422" ] && echo "$message" | grep -q 'without .workflows. permission'; then
+            echo "::error::This sync carries workflow-file diffs - the GITHUB_TOKEN cannot update workflow files (platform gate: the permissions key has no workflows scope). Delivery path: a one-time manual Sync fork by the fork owner; every other diff keeps flowing autonomously. This run stays red by design until the manual sync lands (the watchdog freshness probe is the cross-repo alarm)."
+            exit 1
+          fi
           if [ "$http_code" != "200" ]; then
             echo "::error::merge-upstream failed (HTTP $http_code): $message"
             exit 1
