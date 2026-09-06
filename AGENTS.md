@@ -15,6 +15,7 @@ This file adds project-specific conventions.
      - auth redesign          → docs/security/auth-system-redesign-plan.md
      - client bootstrap       → docs/security/oauth2-client-bootstrap-spec.md
      - client/hosting plan    → docs/security/client-hosting-strategy-plan.md
+     - feature expansion      → docs/feature-expansion-roadmap.md
      - إصلاح أخر               → الملف المعني + CODING_STANDARDS.md
 4. ثم الشجرة المستهدفة من خريطة §10
 ```
