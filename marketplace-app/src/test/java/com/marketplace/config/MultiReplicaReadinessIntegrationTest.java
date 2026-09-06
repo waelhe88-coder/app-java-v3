@@ -123,6 +123,16 @@ import static org.assertj.core.api.Assertions.assertThat;
         // production type so both replicas exercise the real shared Redis path.
         "spring.cache.type=redis",
         "spring.cache.redis.time-to-live=1h",
+        // CI connection budget: the Integration workflow's shared PostgreSQL
+        // service defaults to max_connections=100, and every cached module-test
+        // context holds its own Hikari pool against it. Two more full contexts
+        // at the default 20/5 pool pushed the run over that limit (measured on
+        // main: FATAL "too many clients already" in a NEIGHBORING test class —
+        // marginal, 2-of-3 runs green). The pool size is not part of any
+        // invariant this guard proves — 5/1 for BOTH replicas keeps the layer's
+        // marginal pressure (10 connections) below a single default context.
+        "spring.datasource.hikari.maximum-pool-size=5",
+        "spring.datasource.hikari.minimum-idle=1",
 })
 @ActiveProfiles("test")
 @Testcontainers(disabledWithoutDocker = true)
@@ -200,6 +210,11 @@ class MultiReplicaReadinessIntegrationTest {
                         "--spring.flyway.enabled=true",
                         "--spring.jpa.hibernate.ddl-auto=none",
                         "--spring.cache.type=redis",
+                        // CI connection budget — same rationale as context A's
+                        // properties: the shared service PG caps at 100
+                        // connections and both replicas must stay light.
+                        "--spring.datasource.hikari.maximum-pool-size=5",
+                        "--spring.datasource.hikari.minimum-idle=1",
                         "--spring.datasource.url=" + postgres.getJdbcUrl(),
                         "--spring.datasource.username=" + postgres.getUsername(),
                         "--spring.datasource.password=" + postgres.getPassword(),

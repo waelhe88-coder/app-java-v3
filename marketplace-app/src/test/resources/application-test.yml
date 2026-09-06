@@ -3,6 +3,19 @@ spring:
     url: jdbc:postgresql://localhost:5432/marketplace
     username: ${DB_USERNAME:marketplace}
     password: ${DB_PASSWORD:marketplace}
+    hikari:
+      # CI connection budget (measured on main 2026-09-05, 14c9aaf Integration
+      # run): the workflow's shared PostgreSQL service container defaults to
+      # max_connections=100, while the module-test slice contexts (one per
+      # @ApplicationModuleTest class) accumulate in the TestContext cache and
+      # each holds a default 20/5 Hikari pool against that same instance — the
+      # run crossed the limit and a NEIGHBORING class failed to boot with
+      # FATAL "sorry, too many clients already" (marginal: the same code was
+      # green 30 minutes earlier). No test needs 20 connections; 10/1 keeps
+      # every cached context light so the shared budget holds with margin.
+      # Production pools are untouched (application.yml).
+      maximum-pool-size: 10
+      minimum-idle: 1
   cache:
     type: simple
   jpa:
