@@ -1,0 +1,106 @@
+name: Deployment Channel Sync
+
+# Layer 15 — deployment-channel self-sync: the deployment fork that Railway
+# builds from (waelhe88-coder/app-java-v3, SYSTEM.md §15) fast-forwards
+# itself from the governing main (waelhe/app-java-v3) through the official
+# REST endpoint POST /repos/{owner}/{repo}/merge-upstream, authenticated
+# with the fork's own GITHUB_TOKEN. This closes the last manual step of the
+# delivery lifecycle (the user had to push every sync by hand after each
+# merge) WITHOUT the PAT gate the roadmap was holding: no user asset, no
+# credential, no secret is involved at any point.
+#
+# Official evidence (cached in the session workspace, scripts/l15-docs/):
+#   branches-api.html — "Sync a fork branch with its upstream repository"
+#   "works with the following fine-grained token types: GitHub App
+#   installation access tokens" (the GITHUB_TOKEN IS one); "The fine-grained
+#   token must have the following permission set: 'Contents' repository
+#   permissions (write)"; HTTP 200 = "The branch has been successfully
+#   synced", 409 = merge conflict, 422 = could not be synced otherwise.
+#   events.html — "With the exception of workflow_dispatch and
+#   repository_dispatch, other GITHUB_TOKEN-triggered events do not create
+#   workflow runs at all": the sync's push will NOT re-run the fork's CI
+#   (no duplicate checks), while the push webhook itself still reaches the
+#   Railway GitHub App (webhook delivery is not a workflow run) and triggers
+#   the build — the same trigger the user's manual syncs produced.
+#   token-auth.html — "Use the permissions key in your workflow file to
+#   modify permissions for the GITHUB_TOKEN for an entire workflow".
+#
+# Measured live on THIS exact channel (2026-09-06, session probes):
+#   - scheduled workflows run on the fork's default branch (7 schedule runs
+#     observed; the first fired minutes after the file arrived via a sync —
+#     no manual enablement anywhere);
+#   - workflow-declared write permissions are honored in the fork (its
+#     CodeQL push runs succeeded with security-events: write);
+#   - fork main is unprotected (merge-upstream may fast-forward it);
+#   - scheduled runs are delayed under platform load (observed spacing up
+#     to 2h53m against a 15-minute nominal cron) — the upstream watchdog's
+#     deployment-channel freshness probe measures actual lag and tolerates
+#     this by design.
+#
+# Failure visibility: a failing scheduled run is a red mark on the fork's
+# public Actions history (the fork has issues disabled — measured
+# has_issues=false — so it has no issue channel of its own); the upstream
+# watchdog's freshness probe is the cross-repo alarm for a stuck or dead
+# sync (see .github/workflows/watchdog.yml).
+#
+# One-time bootstrap: this file reaches the fork through a sync itself —
+# the final manual one. From that point on the fork stays current forever.
+
+on:
+  schedule:
+    # Every 30 minutes at displaced minutes (official guidance, cached in
+    # scripts/doc-verify/actions-schedule-events.html: "High load times
+    # include the start of every hour. To decrease the chance of delay,
+    # schedule your workflow to run at a different time of the hour.")
+    - cron: "11,41 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deployment-channel-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Fast-forward the fork from upstream main
+    runs-on: ubuntu-latest
+    # The sync only makes sense in the deployment fork: upstream main IS
+    # the source of truth and has nothing to sync. The file is mirrored to
+    # both repositories; each runs only its own half of the channel.
+    if: github.repository == 'waelhe88-coder/app-java-v3'
+    steps:
+      - name: Sync fork main from upstream (merge-upstream)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          response=$(curl -sS -w '\n%{http_code}' -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPO/merge-upstream" \
+            -d '{"branch":"main"}')
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "HTTP $http_code"
+          echo "$body"
+          message=$(echo "$body" | jq -r '.message // empty' 2>/dev/null || true)
+          merge_type=$(echo "$body" | jq -r '.merge_type // empty' 2>/dev/null || true)
+          if [ "$http_code" != "200" ]; then
+            echo "::error::merge-upstream failed (HTTP $http_code): $message"
+            exit 1
+          fi
+          case "$merge_type" in
+            fast-forward|merge)
+              echo "Fork advanced from upstream (merge_type=$merge_type) - the push webhook reaches the Railway build."
+              ;;
+            *)
+              # 200 IS the documented success code ("The branch has been
+              # successfully synced"); an outcome that is not an advance is
+              # "already up to date" or an equivalent no-op.
+              echo "No advance (merge_type='$merge_type') - fork already matches upstream."
+              ;;
+          esac

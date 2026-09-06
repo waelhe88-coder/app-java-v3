@@ -43,6 +43,25 @@ name: Production Watchdog
 # documented MAIL_* provider placeholder (SYSTEM.md §15, debt item 3 — a
 # user-owned gate, not an outage). Paging on it would be a permanent false
 # alarm. It turns into a probe target the day the MAIL provider is chosen.
+#
+# Alerting home (layer 15, measured 2026-09-06): this workflow manages
+# incidents ONLY where issues exist — upstream (waelhe). The deployment
+# fork carries the same file (mirror sync) and scheduled workflows DO run
+# there (7 schedule runs measured), but the fork has issues DISABLED
+# (measured has_issues=false): every healthy fork run died in "Close
+# resolved incident" with "the repository has disabled issues". The job
+# guard below confines incident management to its home; the fork's runs
+# become skipped (green) instead of failing.
+#
+# Deployment-channel freshness probe (layer 15): the fork that Railway
+# builds from now fast-forwards itself (fork-sync.yml). A dead sync (60-day
+# scheduled-workflow disablement, permission loss, divergence) would leave
+# production serving stale code with every HTTP probe green — so the
+# watchdog also measures the age of the oldest un-deployed upstream commit
+# via the public compare API. Threshold arithmetic is MEASURED, not
+# guessed: nominal sync cadence 30m; actual observed scheduled-run spacing
+# up to 2h53m (documented platform cron delay); Railway build ~15m; limit
+# 240m = observed worst spacing + build + margin.
 
 on:
   schedule:
@@ -59,11 +78,21 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  # issues: write is the alerting action (official syntax doc: "issues:
+  # write permits an action to add a comment to an issue").
+  # contents: read is explicit for the freshness probe's gh api reads of
+  # the two repositories' public branch state (least privilege: read only).
   issues: write
+  contents: read
 
 jobs:
   probe:
     name: Probe public production endpoints
+    # Alerting home: only upstream runs this job (issues enabled there).
+    # Measured on the fork: gh issue list fails with "the repository has
+    # disabled issues" on every healthy run — the incident steps must not
+    # execute there. See the header comment for the full evidence.
+    if: github.repository == 'waelhe/app-java-v3'
     runs-on: ubuntu-latest
     steps:
       - name: Probe public production endpoints
@@ -105,6 +134,59 @@ jobs:
             exit 1
           fi
 
+      - name: Probe deployment channel freshness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: waelhe/app-java-v3
+          DEPLOY_FORK: waelhe88-coder/app-java-v3
+          MAX_LAG_MINUTES: 240
+        run: |
+          set -u
+          if ! up_sha=$(gh api "repos/$UPSTREAM/branches/main" --jq .commit.sha 2>/dev/null); then
+            echo "FAIL  deployment channel: cannot read upstream main" | tee -a probe-results.txt
+            exit 1
+          fi
+          if ! fork_sha=$(gh api "repos/$DEPLOY_FORK/branches/main" --jq .commit.sha 2>/dev/null); then
+            echo "FAIL  deployment channel: cannot read fork main" | tee -a probe-results.txt
+            exit 1
+          fi
+          if [ "$up_sha" = "$fork_sha" ]; then
+            echo "OK    deployment channel fresh: fork main == upstream main ($(
+              echo "$up_sha" | cut -c1-12))" | tee -a probe-results.txt
+            exit 0
+          fi
+          # The fork lags upstream: measure the age of the OLDEST un-deployed
+          # commit. fork_sha is expected to be an ancestor of upstream main
+          # (the fork only ever advances by fast-forward); a failed compare
+          # means the channel has diverged — an incident of its own.
+          if ! cmp_json=$(gh api "repos/$UPSTREAM/compare/$fork_sha...$up_sha" 2>/dev/null); then
+            echo "FAIL  deployment channel: fork main ($(
+              echo "$fork_sha" | cut -c1-12)) is not in upstream history — channel diverged?" | tee -a probe-results.txt
+            exit 1
+          fi
+          ahead_by=$(echo "$cmp_json" | jq .ahead_by)
+          # The compare list is capped at 250 commits without paging
+          # (official doc: "the returned list is limited to 250 commits"):
+          # more than 250 un-deployed commits is a dead channel — page on
+          # it, do not try to date it.
+          if [ "$ahead_by" -gt 250 ]; then
+            echo "FAIL  deployment channel stale: fork is $ahead_by commits behind upstream" | tee -a probe-results.txt
+            exit 1
+          fi
+          oldest=$(echo "$cmp_json" | jq -r '.commits | if length > 0 then (map(.commit.committer.date) | min) else empty end')
+          if [ -z "$oldest" ]; then
+            echo "FAIL  deployment channel: cannot determine lag (ahead_by=$ahead_by)" | tee -a probe-results.txt
+            exit 1
+          fi
+          now_epoch=$(date -u +%s)
+          oldest_epoch=$(date -u -d "$oldest" +%s)
+          lag_minutes=$(( (now_epoch - oldest_epoch) / 60 ))
+          if [ "$lag_minutes" -gt "$MAX_LAG_MINUTES" ]; then
+            echo "FAIL  deployment channel stale: fork is ${lag_minutes}m behind upstream (limit ${MAX_LAG_MINUTES}m, ahead_by=$ahead_by)" | tee -a probe-results.txt
+            exit 1
+          fi
+          echo "OK    deployment channel lagging within tolerance: ${lag_minutes}m (limit ${MAX_LAG_MINUTES}m, ahead_by=$ahead_by)" | tee -a probe-results.txt
+
       - name: Open incident issue (deduplicated)
         if: failure() || inputs.force_incident == true
         env:
@@ -122,7 +204,7 @@ jobs:
             exit 0
           fi
           {
-            echo "## Production endpoints unhealthy"
+            echo "## Production unhealthy (endpoints or deployment channel)"
             echo
             echo "Detected by run $RUN_URL at $(date -u '+%Y-%m-%d %H:%M:%S UTC')."
             echo
