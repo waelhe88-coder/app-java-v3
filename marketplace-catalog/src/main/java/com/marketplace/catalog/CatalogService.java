@@ -64,7 +64,7 @@ public class CatalogService implements CatalogSearchPort, ListingPriceProvider, 
 
     @Override
     @Transactional(readOnly = true)
-    @Cacheable(cacheNames = "catalog-active", key = "#pageable.pageNumber + '-' + #pageable.pageSize + '-' + #pageable.sort")
+    @Cacheable(cacheNames = "catalog-active-v2", key = "#pageable.pageNumber + '-' + #pageable.pageSize + '-' + #pageable.sort")
     public Page<ListingSummary> listActive(Pageable pageable) {
         Page<ProviderListing> page = listingRepository.findByStatus(ListingStatus.ACTIVE, pageable);
         return toSummaryPage(page);
@@ -72,7 +72,7 @@ public class CatalogService implements CatalogSearchPort, ListingPriceProvider, 
 
     @Override
     @Transactional(readOnly = true)
-    @Cacheable(cacheNames = "catalog-by-category", key = "#category + '-' + #pageable.pageNumber + '-' + #pageable.pageSize + '-' + #pageable.sort")
+    @Cacheable(cacheNames = "catalog-by-category-v2", key = "#category + '-' + #pageable.pageNumber + '-' + #pageable.pageSize + '-' + #pageable.sort")
     public Page<ListingSummary> listByCategory(String category, Pageable pageable) {
         Page<ProviderListing> page = listingRepository.findByCategoryAndStatus(category, ListingStatus.ACTIVE, pageable);
         return toSummaryPage(page);
@@ -91,7 +91,7 @@ public class CatalogService implements CatalogSearchPort, ListingPriceProvider, 
 
     @Override
     @Transactional(readOnly = true)
-    @Cacheable(cacheNames = "catalog-search", key = "#query + '-' + #pageable.pageNumber + '-' + #pageable.pageSize + '-' + #pageable.sort")
+    @Cacheable(cacheNames = "catalog-search-v2", key = "#query + '-' + #pageable.pageNumber + '-' + #pageable.pageSize + '-' + #pageable.sort")
     public Page<ListingSummary> searchFullText(String query, Pageable pageable) {
         Page<ProviderListing> page = listingRepository.searchFullText(query, pageable);
         if (page.isEmpty()) {
@@ -147,8 +147,17 @@ public class CatalogService implements CatalogSearchPort, ListingPriceProvider, 
         return new ListingInfo(listing.getProviderId(), listing.getPriceCents(), listing.getCurrency());
     }
 
+    // Cache names are NAMESPACED BY SCHEMA VERSION (CodeRabbit #241): the four
+    // ListingSummary caches hold JDK-serialized records — a record-component
+    // change (currency was added by the B4 layer) lets a stale pre-change entry
+    // deserialize with null components and serve it as a cache hit, bypassing
+    // the mapping that populates the new component. Bumping the name with every
+    // ListingSummary component change evicts at deploy time through the deploy
+    // itself (old entries become unreachable and expire via the 1h TTL). Any
+    // future change to ListingSummary MUST bump this suffix — pinned by
+    // ListingSummaryCacheContractFilesTest.
     private static final Set<String> CATALOG_CACHE_NAMES =
-            Set.of("catalog-active", "catalog-by-category", "catalog-search", "search-results");
+            Set.of("catalog-active-v2", "catalog-by-category-v2", "catalog-search-v2", "search-results-v2");
 
     @Observed(name = "catalog.create.listing")
     @PreAuthorize("hasRole('PROVIDER')")

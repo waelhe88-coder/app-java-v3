@@ -11,6 +11,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
@@ -139,18 +140,37 @@ public class OAuth2ClientSecretInitializer implements ApplicationRunner {
 
         RegisteredClient target = buildTarget(existing, clientId, rawSecret, secretChanged, redirectUris);
 
-        if (!needsSave(existing, target)) {
-            return;
-        }
-
-        registeredClientRepository.save(target);
-
         if (existing == null) {
-            log.info("Bootstrapped registered client '{}' from environment configuration", clientId);
-        } else if (secretChanged) {
-            log.info("Rotated client_secret for registered client '{}' from environment configuration", clientId);
-        } else {
-            log.info("Converged settings for registered client '{}' from environment configuration", clientId);
+            try {
+                registeredClientRepository.save(target);
+                log.info("Bootstrapped registered client '{}' from environment configuration", clientId);
+            } catch (DataIntegrityViolationException ex) {
+                // Concurrent-replica bootstrap (CodeRabbit #241):
+                // JdbcRegisteredClientRepository.save is check-then-insert, so
+                // two replicas booting simultaneously can both see no row and
+                // both insert the same stable CLIENT_ID — the loser's insert
+                // violates the primary key and would fail startup. The row now
+                // exists: converge onto it exactly like a normal restart.
+                RegisteredClient winner = registeredClientRepository.findByClientId(clientId);
+                if (winner == null) {
+                    // Not a duplicate-key failure after all — a real integrity
+                    // problem. Do not mask it.
+                    throw ex;
+                }
+                boolean winnerSecretChanged = !passwordEncoder.matches(rawSecret, winner.getClientSecret());
+                RegisteredClient converged = buildTarget(winner, clientId, rawSecret, winnerSecretChanged, redirectUris);
+                if (needsSave(winner, converged)) {
+                    registeredClientRepository.save(converged);
+                }
+                log.info("Converged registered client '{}' after concurrent bootstrap by another replica", clientId);
+            }
+        } else if (needsSave(existing, target)) {
+            registeredClientRepository.save(target);
+            if (secretChanged) {
+                log.info("Rotated client_secret for registered client '{}' from environment configuration", clientId);
+            } else {
+                log.info("Converged settings for registered client '{}' from environment configuration", clientId);
+            }
         }
     }
 

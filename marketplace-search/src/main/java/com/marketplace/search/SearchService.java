@@ -23,7 +23,12 @@ public class SearchService {
         this.catalogSearchPort = catalogSearchPort;
     }
 
-    @Cacheable(cacheNames = "search-results", key = "(#query == null ? '' : #query.trim()) + '|' + (#category == null ? '' : #category.trim()) + '|' + #pageable.pageNumber + '-' + #pageable.pageSize + '-' + #pageable.sort")
+    // The -v2 suffix is the ListingSummary serialization-schema namespace —
+    // see CatalogService.CATALOG_CACHE_NAMES: the record gained a currency
+    // component (B4), so pre-change cache entries must never be read (CodeRabbit
+    // #241). Bump together with the other three names on every ListingSummary
+    // component change.
+    @Cacheable(cacheNames = "search-results-v2", key = "(#query == null ? '' : #query.trim()) + '|' + (#category == null ? '' : #category.trim()) + '|' + #pageable.pageNumber + '-' + #pageable.pageSize + '-' + #pageable.sort")
     public Page<ListingSummary> search(String query, String category, Pageable pageable) {
         return search(new SearchCriteria(query, category, null, null), pageable);
     }

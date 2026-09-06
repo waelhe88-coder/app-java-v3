@@ -4,7 +4,10 @@ useDefault = true
 [allowlist]
 description = "Test/demo fixtures that are non-production"
 paths = [
-  '''marketplace-platform-infra/src/test/resources/keys/''',
-  '''marketplace-app/src/test/resources/keys/''',
-  '''marketplace-app/src/main/resources/keys/dev-rsa.pub'''
+  # Anchored to the exact committed fixture files (CWE-693, CodeRabbit #241):
+  # a directory-scope pattern would silently allowlist ANY future file placed
+  # under these keys/ directories. Each entry names one committed fixture.
+  '''^marketplace-platform-infra/src/test/resources/keys/test-jwt\.jks$''',
+  '''^marketplace-app/src/test/resources/keys/dev-rsa-private\.pem$''',
+  '''^marketplace-app/src/main/resources/keys/dev-rsa\.pub$'''
 ]

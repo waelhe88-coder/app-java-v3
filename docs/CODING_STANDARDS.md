@@ -474,6 +474,7 @@ public void bulkUpdate() { ... }
 | `@CacheEvict` on every mutation method | Prevents stale data | Spring docs |
 | Use explicit `key` SpEL (not default) | Predictable cache behavior | Spring docs |
 | Cache names match domain (`"bookings"`, `"availability"`) | Discoverable | Existing pattern |
+| **Caches holding JDK-serialized records (`ListingSummary`) MUST version their names (`-v2`) — bump with every record-component change, in the annotations, the invalidation set AND the yml list together** | A record-component change makes pre-change entries deserialize with default-value components (null currency) and serve them as hits; the version bump is the deploy-time eviction | Java Object Serialization Spec — Record Serialization; guarded by `ListingSummaryCacheContractFilesTest` (CodeRabbit #241) |
 | Redis backing configured in `application.yml` (`spring.cache.type=redis`) | Distributed cache | [Spring Boot — Redis Cache](https://docs.spring.io/spring-boot/reference/io/caching.html#io.caching.provider.redis) |
 
 ---
@@ -769,6 +770,16 @@ if (booking != null) { ... }  // ❌ use Optional.map/filter/ifPresent
 7. Add tests (unit + integration) — JaCoCo ≥ 70%
 8. Run `./mvnw verify` — must pass all gates
 
+### 16.4 Flyway Migration Rules (index edition — CodeRabbit #241 guidance)
+
+| Rule | Rationale | Reference |
+|------|-----------|-----------|
+| Never modify an applied migration — new change = new `V<N>` file | Flyway checksums / production history | Flyway docs |
+| Plain `CREATE INDEX` is the default for this repo's tables | Tables are small; Flyway runs at boot BEFORE the app serves traffic (a failed migration fails startup — the liveness gate), so no live writes are blocked | [PostgreSQL — CREATE INDEX](https://www.postgresql.org/docs/current/sql-createindex.html) |
+| For a future index on a LARGE table, use `CREATE INDEX CONCURRENTLY` — which **requires the non-transactional Flyway path**: the migration needs `executeInTransaction=false` AND `flyway.postgresql.transactional.lock=false` (session-level locks; the default transactional advisory lock deadlocks against the concurrent build's wait) — both per the official Flyway transaction-handling docs | `CREATE INDEX` takes a SHARE lock that blocks writes for the whole build; CONCURRENTLY avoids it but refuses to run in a transaction block AND deadlocks against Flyway's default lock | [Flyway — Migration transaction handling](https://documentation.red-gate.com/flyway/flyway-concepts/migrations/migration-transaction-handling) |
+| Destructive `DROP TABLE` migrations must ship in a release AFTER the code that stopped using the tables is live (two-release rollout) | A rolling deploy can still run an old replica against the dropped tables | Squawk `ban-drop-table` |
+| Unique partial indexes (`WHERE col IS NOT NULL`) for one-to-one links with optional columns | NULL stays free for unlinked rows while linked values are enforced unique | PostgreSQL docs |
+
 ---
 
 ## 17. Deployment
@@ -834,7 +845,7 @@ RUN java -Djarmode=layertools -jar app.jar extract
 
 ### 17.4 Health Checks
 
-**Implemented design (2026-09-04, official-recipe aligned):** the repo's Dockerfile carries **no `HEALTHCHECK`** — the official Spring Boot 4.1 container recipe does not include one, and on Railway the platform owns deploy-time gating via `healthcheckPath` (`railway.toml` [deploy] → `/actuator/health/liveness`). The snippet below remains the reference pattern for generic Docker hosts that lack a platform healthcheck:
+**Implemented design (2026-09-04, official-recipe aligned; reference updated 2026-09-06, CodeRabbit #241):** the repo's Dockerfile carries **no `HEALTHCHECK`** — the official Spring Boot 4.1 container recipe does not include one, and on Railway the platform owns deploy-time gating via the IaC config `.railway/railway.ts` (`service("app-java-v3", { healthcheck: "/actuator/health/liveness", ... })`). The snippet below remains the reference pattern for generic Docker hosts that lack a platform healthcheck:
 
 ```dockerfile
 # Dockerfile HEALTHCHECK (generic-Docker reference pattern — not used on Railway)

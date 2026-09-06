@@ -236,6 +236,9 @@ class MultiReplicaReadinessIntegrationTest {
     }
 
     @Autowired
+    private org.springframework.cache.CacheManager cacheManager;
+
+    @Autowired
     private JdbcTemplate jdbcTemplate;
 
     @Autowired
@@ -381,6 +384,17 @@ class MultiReplicaReadinessIntegrationTest {
 
     @Test
     void cacheEntryPutByReplicaAIsServedByReplicaB() throws Exception {
+        // Cold start (CodeRabbit #241 / the ColdCache pattern): a warm entry
+        // from an earlier test method would answer the first request from the
+        // cache — the PUT would never happen and the cross-replica proof
+        // would collapse silently (both assertions still pass).
+        cacheManager.getCacheNames().forEach(name -> {
+            var cache = cacheManager.getCache(name);
+            if (cache != null) {
+                cache.clear();
+            }
+        });
+
         seedListingRow();
 
         // Replica A: cold miss -> the @Cacheable PUT into shared Redis.

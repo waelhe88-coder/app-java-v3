@@ -250,9 +250,37 @@ class AuthorizationServerLoginGateIntegrationTest {
     void bootstrappedWebClientRequiresAndRecordsConsentPerPrincipal() throws Exception {
         GateResult first = consentGate(ADMIN_USERNAME, PASSWORD);
         assertThat(first.accessToken()).isNotBlank();
+        assertThat(consentPageRendered)
+                .as("a fresh principal must actually pass the consent page")
+                .isTrue();
+
+        // CodeRabbit #241: assert the persistence itself — the (client,
+        // principal) row is what makes the next same-principal authorization
+        // skip consent. Without it the test could pass while consent
+        // persistence is broken (the direct-code branch and the consent-page
+        // branch both end in a token).
+        RegisteredClient appClient = registeredClientRepository.findByClientId(APP_CLIENT_ID);
+        org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationConsent consent =
+                authorizationConsentService.findById(appClient.getId(), ADMIN_USERNAME);
+        assertThat(consent).as("the first approval must persist consent for (client, principal)")
+                .isNotNull();
+        assertThat(consent.getScopes()).contains("openid", "profile");
+
+        // Second authorization for the SAME principal: the recorded consent
+        // must skip the page and return the code directly.
+        GateResult repeated = consentGate(ADMIN_USERNAME, PASSWORD);
+        assertThat(repeated.accessToken())
+                .as("same-principal re-authorization skips consent and still issues tokens")
+                .isNotBlank();
+        assertThat(consentPageRendered)
+                .as("recorded consent must skip the consent page on the next authorization")
+                .isFalse();
 
         GateResult second = consentGate(USER_USERNAME, PASSWORD);
         assertThat(second.accessToken()).isNotBlank();
+        assertThat(consentPageRendered)
+                .as("a different principal must pass the consent page (cross-principal isolation)")
+                .isTrue();
     }
 
     /**
@@ -286,6 +314,11 @@ class AuthorizationServerLoginGateIntegrationTest {
      * marketplace-web-client, which requires consent. Step 4 (authenticated authorize) is
      * followed by the rendered consent page POST before the code is returned.
      */
+    // Set by consentGate: which branch the LAST flow took — the consent
+    // page (fresh principal) or the direct-code 302 (recorded consent).
+    // The #241 strengthening asserts both directions explicitly.
+    private boolean consentPageRendered;
+
     private GateResult consentGate(String username, String password) throws Exception {
         RegisteredClient appClient = registeredClientRepository.findByClientId(APP_CLIENT_ID);
         assertThat(appClient)
@@ -335,7 +368,9 @@ class AuthorizationServerLoginGateIntegrationTest {
         if (authorizeSecond.statusCode() == 302 && authorizeSecond.headers().firstValue("Location").orElse("")
                 .contains("code=")) {
             authorizationCode = queryParam(authorizeSecond.headers().firstValue("Location").orElse(""), "code");
+            consentPageRendered = false;
         } else {
+            consentPageRendered = true;
             assertThat(authorizeSecond.statusCode())
                     .as("authorize authenticated must render the consent page, got: %s", body(authorizeSecond))
                     .isEqualTo(200);

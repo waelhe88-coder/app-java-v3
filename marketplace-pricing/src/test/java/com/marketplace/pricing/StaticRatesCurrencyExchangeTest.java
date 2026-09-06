@@ -53,6 +53,22 @@ class StaticRatesCurrencyExchangeTest {
         var quote = exchange.convert(10_000L, Currency.getInstance("USD"), Currency.getInstance("EUR"));
 
         assertThat(quote.targetMinorUnits()).isEqualTo(9_259L);
+        // CodeRabbit #241: the quoted rate must be the rate APPLIED to the
+        // amount — rateOf(from)/rateOf(to) = 3.75/4.05 ≈ 0.9259 USD->EUR —
+        // not 1/rateOf(to), which only holds when the source IS the base.
+        assertThat(quote.rate())
+                .as("non-base-to-non-base conversion must quote the applied pair rate")
+                .isEqualByComparingTo(new BigDecimal("3.75").divide(new BigDecimal("4.05"), new java.math.MathContext(12)));
+    }
+
+    @Test
+    void quotedRate_matchesAmountConversionForBaseSource() {
+        // Base -> quoted: amount uses 1/rateOf(to) exactly, and so must the
+        // quoted rate (rateOf(base) == 1 keeps the general formula honest).
+        var quote = exchange.convert(10_000L, Currency.getInstance("SAR"), Currency.getInstance("USD"));
+
+        assertThat(quote.rate())
+                .isEqualByComparingTo(new BigDecimal("1").divide(new BigDecimal("3.75"), new java.math.MathContext(12)));
     }
 
     @Test

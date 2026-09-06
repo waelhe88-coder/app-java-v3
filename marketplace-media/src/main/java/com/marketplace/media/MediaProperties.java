@@ -39,7 +39,14 @@ public record MediaProperties(
             @DefaultValue("auto") String region,
             @DefaultValue("") String bucket,
             @DefaultValue("") String accessKey,
-            @DefaultValue("") String secretKey
+            @DefaultValue("") String secretKey,
+            /**
+             * Explicit opt-in for cleartext (http://) storage endpoints — local
+             * emulator deployments only. The production constructor of
+             * {@link S3MediaStorage} rejects non-HTTPS endpoints unless this
+             * flag is set (CWE-319, CodeRabbit #241).
+             */
+            @DefaultValue("false") boolean allowInsecureEndpoint
     ) {}
 
     public record Limits(

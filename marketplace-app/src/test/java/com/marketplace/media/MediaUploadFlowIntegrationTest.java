@@ -127,6 +127,69 @@ class MediaUploadFlowIntegrationTest {
     }
 
     @Test
+    void concurrentUploadsForTheSameListingGetDistinctPositions() throws Exception {
+        // CodeRabbit #241: countByListingId()+1 inside a transaction does not
+        // serialize concurrent transactions — four simultaneous uploads for
+        // one listing would read the same count and persist duplicate
+        // positions. The pg_advisory_xact_lock in the repository makes the
+        // allocation exclusive per listing; this test fails without it (with
+        // high probability at 4 racers) and always passes with it.
+        UUID userId = UUID.randomUUID();
+        UUID providerId = UUID.randomUUID();
+        UUID listingId = UUID.randomUUID();
+        mockOwner(userId, providerId, listingId);
+        when(storage.presignUpload(anyString(), anyString())).thenReturn("https://u");
+
+        // @WithMockUser binds the SecurityContext to the TEST thread only —
+        // the worker threads must carry the same authentication through the
+        // @PreAuthorize gate.
+        org.springframework.security.core.Authentication authentication =
+                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        assertThat(authentication).as("the class-level @WithMockUser must be active").isNotNull();
+
+        int racers = 4;
+        var startGate = new java.util.concurrent.CountDownLatch(1);
+        // CodeRabbit #242 round 2: without a ready gate, startGate.countDown()
+        // can fire before every worker reaches await() — the uploads then run
+        // serially and the test passes without exercising the race at all.
+        var readyGate = new java.util.concurrent.CountDownLatch(racers);
+        var ids = new java.util.ArrayList<java.util.concurrent.Future<UUID>>();
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(racers)) {
+            for (int i = 0; i < racers; i++) {
+                ids.add(pool.submit(() -> {
+                    try {
+                        org.springframework.security.core.context.SecurityContextHolder.setContext(
+                                org.springframework.security.core.context.SecurityContextHolder
+                                        .createEmptyContext());
+                        org.springframework.security.core.context.SecurityContextHolder.getContext()
+                                .setAuthentication(authentication);
+                        readyGate.countDown();
+                        startGate.await();
+                        return mediaService.requestUpload(listingId, "image/png", 100L, null).mediaId();
+                    } finally {
+                        org.springframework.security.core.context.SecurityContextHolder.clearContext();
+                    }
+                }));
+            }
+            assertThat(readyGate.await(30, java.util.concurrent.TimeUnit.SECONDS))
+                    .as("every racer must be parked at the start gate before the race starts")
+                    .isTrue();
+            startGate.countDown();
+            var positions = new java.util.ArrayList<Integer>();
+            for (var id : ids) {
+                positions.add(mediaAssetRepository
+                        .findById(id.get(30, java.util.concurrent.TimeUnit.SECONDS))
+                        .orElseThrow()
+                        .getPosition());
+            }
+            assertThat(positions)
+                    .as("the advisory lock serializes position allocation — no duplicates")
+                    .doesNotHaveDuplicates()
+                    .containsExactlyInAnyOrder(1, 2, 3, 4);
+        }
+    }
+
+    @Test
     void confirmWithoutStorageVerification_staysPending() {
         UUID userId = UUID.randomUUID();
         UUID providerId = UUID.randomUUID();

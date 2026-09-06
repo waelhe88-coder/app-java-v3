@@ -49,7 +49,8 @@ class PaymentsServicePspTest {
 
     private PaymentsService service(ObjectProvider<PspChannel> channel) {
         return new PaymentsService(intentRepository, paymentRepository, webhookEventRepository,
-                eventPublisher, currentUserProvider, bookingParticipantProvider, webhookSecurity, channel);
+                eventPublisher, currentUserProvider, bookingParticipantProvider, webhookSecurity,
+                new WebhookEventRecorder(webhookEventRepository), channel);
     }
 
     private PaymentIntent ownedIntent() {
@@ -110,7 +111,7 @@ class PaymentsServicePspTest {
     void handleStripeWebhook_metadataResolution_dispatchesVerifiedEvent() {
         when(boundChannel.getIfAvailable()).thenReturn(pspChannel);
         when(webhookEventRepository.findByEventId("evt_9")).thenReturn(Optional.empty());
-        when(webhookEventRepository.save(any(PaymentWebhookEvent.class)))
+        when(webhookEventRepository.saveAndFlush(any(PaymentWebhookEvent.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
         PaymentIntent intent = PaymentIntent.create(UUID.randomUUID(), UUID.randomUUID(), 5000L, null);
         UUID intentId = intent.getId();
@@ -123,7 +124,7 @@ class PaymentsServicePspTest {
         boolean created = service(boundChannel).handleStripeWebhook("payload", "t=1,v1=sig");
 
         assertTrue(created);
-        verify(webhookEventRepository).save(argThat(ev -> "stripe".equals(ev.getProvider())
+        verify(webhookEventRepository).saveAndFlush(argThat(ev -> "stripe".equals(ev.getProvider())
                 && "evt_9".equals(ev.getEventId())));
         assertEquals(PaymentIntentStatus.SUCCEEDED, intent.getStatus());
     }
@@ -132,7 +133,7 @@ class PaymentsServicePspTest {
     void handleStripeWebhook_pspLinkFallback_resolvesIntentWithoutMetadata() {
         when(boundChannel.getIfAvailable()).thenReturn(pspChannel);
         when(webhookEventRepository.findByEventId("evt_10")).thenReturn(Optional.empty());
-        when(webhookEventRepository.save(any(PaymentWebhookEvent.class)))
+        when(webhookEventRepository.saveAndFlush(any(PaymentWebhookEvent.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
         PaymentIntent intent = PaymentIntent.create(UUID.randomUUID(), UUID.randomUUID(), 5000L, null);
         UUID intentId = intent.getId();
@@ -162,7 +163,58 @@ class PaymentsServicePspTest {
         boolean created = service(boundChannel).handleStripeWebhook("payload", "t=1,v1=sig");
 
         assertFalse(created, "a replayed Stripe notification must not re-dispatch");
-        verify(webhookEventRepository, never()).save(any());
+        verify(webhookEventRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void handleStripeWebhook_concurrentDuplicateInsert_answersAlreadyProcessed() {
+        // CodeRabbit #241: two concurrent deliveries of the same event both
+        // pass the findByEventId lookup. The recorder's flushed insert is the
+        // serialization point — the loser (unique event_id violation crossing
+        // the recorder's transactional boundary) is answered already-processed
+        // (false / HTTP 200), never a 5xx, and never dispatches.
+        UUID intentId = UUID.randomUUID();
+        when(boundChannel.getIfAvailable()).thenReturn(pspChannel);
+        when(pspChannel.verifyWebhook("payload", "t=1,v1=sig"))
+                .thenReturn(new PspChannel.VerifiedWebhook("evt_12", "payment_intent.succeeded",
+                        intentId, "pi_12"));
+        // Pre-check: absent; post-DIVE re-check: the winner's row exists.
+        when(webhookEventRepository.findByEventId("evt_12"))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(mock(PaymentWebhookEvent.class)));
+        when(webhookEventRepository.saveAndFlush(any(PaymentWebhookEvent.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "duplicate key value violates unique constraint"));
+
+        boolean created = service(boundChannel).handleStripeWebhook("payload", "t=1,v1=sig");
+
+        assertFalse(created, "the losing concurrent delivery is the already-processed replay");
+        verify(intentRepository, never()).findById(any());
+    }
+
+    @Test
+    void handleStripeWebhook_unresolvedSucceededEvent_isRejectedBeforeRecording() {
+        // CodeRabbit #241 (swallowed event): a payment_intent.succeeded event
+        // whose intent cannot be resolved would previously be recorded and
+        // acknowledged — then deduplicated forever while the intent was never
+        // confirmed. It must be rejected BEFORE recording so Stripe retries
+        // it (non-2xx), by which time the intent resolves via metadata or the
+        // V33 psp_intent_id link.
+        when(boundChannel.getIfAvailable()).thenReturn(pspChannel);
+        when(pspChannel.verifyWebhook("payload", "t=1,v1=sig"))
+                .thenReturn(new PspChannel.VerifiedWebhook("evt_13", "payment_intent.succeeded",
+                        null, "pi_unlinked_13"));
+        when(webhookEventRepository.findByEventId("evt_13")).thenReturn(Optional.empty());
+        when(intentRepository.findByPspIntentId("pi_unlinked_13")).thenReturn(Optional.empty());
+
+        com.marketplace.shared.api.ConflictException thrown = assertThrows(
+                com.marketplace.shared.api.ConflictException.class,
+                () -> service(boundChannel).handleStripeWebhook("payload", "t=1,v1=sig"));
+
+        assertTrue(thrown.getMessage().contains("evt_13"));
+        // Rejected BEFORE the dedup row exists — the retry is not blocked.
+        verify(webhookEventRepository, never()).saveAndFlush(any());
+        verify(webhookEventRepository, never()).deleteByEventId(any());
     }
 
     @Test

@@ -43,6 +43,7 @@ class PaymentsServiceTest {
             currentUserProvider,
             bookingParticipantProvider,
             webhookSecurity,
+            new WebhookEventRecorder(webhookEventRepository),
             pspChannel
     );
 

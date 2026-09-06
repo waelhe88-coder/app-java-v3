@@ -158,6 +158,22 @@ class PaymentsPspFilesTest {
     }
 
     @Test
+    void migrationV36MakesThePspLinkOneToOneAtTheDatabaseLevel() throws IOException {
+        // CodeRabbit #241 (finding on V33): the entity-side guard alone lets
+        // two rows hold the same non-null psp_intent_id, and the webhook
+        // resolver's findByPspIntentId contract requires a single row.
+        String sql = read("marketplace-app/src/main/resources/db/migration/V36__unique_psp_intent_link.sql");
+        assertThat(sql)
+                .as("the non-unique V33 index is retired in favor of the unique one")
+                .contains("drop index if exists idx_payment_intents_psp");
+        assertThat(sql)
+                .as("the link is unique among linked rows only (NULL stays free)")
+                .contains("create unique index if not exists uq_payment_intents_psp_intent_id")
+                .contains("on payment_intents (psp_intent_id)")
+                .contains("where psp_intent_id is not null");
+    }
+
+    @Test
     void controllerCarriesTheRawBodyStripeEndpoint() throws IOException {
         String controller = read("marketplace-payments/src/main/java/com/marketplace/payments/PaymentsController.java");
         assertThat(controller)

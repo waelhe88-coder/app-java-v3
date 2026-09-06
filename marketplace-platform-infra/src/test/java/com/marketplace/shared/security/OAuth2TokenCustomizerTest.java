@@ -65,7 +65,7 @@ class OAuth2TokenCustomizerTest {
 
         assertThat(context.getClaims().build().getClaims())
                 .doesNotContainKey("roles")
-                .doesNotContainKey("audience");
+                .doesNotContainKey("aud");
     }
 
     private static JwtEncodingContext buildContext(

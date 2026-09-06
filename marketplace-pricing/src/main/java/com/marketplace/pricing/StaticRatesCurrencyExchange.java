@@ -54,7 +54,11 @@ class StaticRatesCurrencyExchange implements CurrencyExchangePort {
                 .setScale(0, RoundingMode.HALF_UP)
                 .longValueExact();
 
-        BigDecimal effectiveRate = BigDecimal.ONE.divide(rateOf(to), RATE_MATH);
+        // The quoted rate must be the rate actually applied to the amount:
+        // source -> base -> target means rateOf(from) / rateOf(to) — the same
+        // ratio targetMajor applies above. Returning 1/rateOf(to) reported a
+        // base-to-target rate for every non-base source (CodeRabbit #241).
+        BigDecimal effectiveRate = rateOf(from).divide(rateOf(to), RATE_MATH);
         return new ExchangeQuote(amountMinorUnits, from.getCurrencyCode(),
                 targetMinor, to.getCurrencyCode(), effectiveRate, RATE_SOURCE);
     }

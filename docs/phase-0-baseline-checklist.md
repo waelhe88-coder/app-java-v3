@@ -14,10 +14,9 @@ Use this checklist before implementing any new backend module.
 - [x] Architecture rules test passes.
 
 ## Local runtime gates
-- [ ] Infrastructure services started when needed:
-  - [ ] `docker compose up -d postgres redis`
-- [ ] App starts in dev profile:
-  - [ ] `mvn -pl marketplace-app -am spring-boot:run -Dspring-boot.run.profiles=dev`
+- [ ] `docker compose up -d postgres redis` healthy (compose service `postgres` = `postgres:18-alpine`; since the 2026-09-06 compose fix the named volume `pgdata18` mounts the PG18 data root `/var/lib/postgresql` — the versioned cluster lives at `/var/lib/postgresql/18/docker`).
+- [ ] **Local PostgreSQL 17 → 18 data carry-over (CodeRabbit #241 note):** an older local `pgdata` volume (mounted at the pre-18 path `/var/lib/postgresql/data`) does NOT migrate by changing the image or the mount — the cluster is initialized fresh under `pgdata18`. To carry data over, dump/restore (`pg_dump -Fc` on the old container → `pg_restore` into the new one) or run `pg_upgrade` with both clusters available; for a throwaway dev dataset, simply `docker volume rm` the old `pgdata` and let 18 initialize.
+- [ ] `mvn -pl marketplace-app -am spring-boot:run -Dspring-boot.run.profiles=dev`
 
 ## Governance gates
 - [x] New work item references official Spring/Maven sources.

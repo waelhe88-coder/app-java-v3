@@ -26,6 +26,9 @@ on:
 permissions:
   contents: read
   packages: write
+  # Read access to check-runs for the release gate below (CWE-345, CodeRabbit
+  # #241): the tag's CI evidence is queried before anything is published.
+  checks: read
 
 jobs:
   publish:
@@ -48,6 +51,47 @@ jobs:
 
       - name: Derive release version from tag
         run: echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      # Release gate (CWE-345, CodeRabbit #241): publishing ran with
+      # -DskipTests on the assumption that "the tag points at a main commit
+      # whose required checks ran the full suite" — an assumption only held
+      # by comments, not by anything executable. This step makes the
+      # requirement a check: the tagged commit must be part of main history
+      # AND every check that ran on it must be green. A tag on an unverified
+      # commit now fails the workflow before `deploy`.
+      - name: Gate on green CI for the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          commit="${{ github.sha }}"
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$commit" FETCH_HEAD; then
+            echo "::error::release tag ${GITHUB_REF_NAME} points at $commit, which is NOT part of main history — refusing to publish an unverified commit" >&2
+            exit 1
+          fi
+          # No check may still be RUNNING (CodeRabbit #242 round 2: a queued or
+          # in_progress check must block the gate even when another check
+          # already succeeded — publishing must wait for the full check set).
+          pending=$(gh api --paginate "repos/${{ github.repository }}/commits/$commit/check-runs" \
+            --jq '[.check_runs[] | select(.status != "completed")] | length')
+          if [ "${pending:-0}" -ne 0 ]; then
+            echo "::error::tagged commit $commit still has $pending check-run(s) not completed — refusing to publish before CI finishes" >&2
+            exit 1
+          fi
+          failing=$(gh api --paginate "repos/${{ github.repository }}/commits/$commit/check-runs" \
+            --jq '[.check_runs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required" or .conclusion == "startup_failure") | .name] | join(", ")')
+          if [ -n "$failing" ]; then
+            echo "::error::tagged commit $commit has non-green checks: $failing" >&2
+            exit 1
+          fi
+          successes=$(gh api --paginate "repos/${{ github.repository }}/commits/$commit/check-runs" \
+            --jq '[.check_runs[] | select(.conclusion == "success")] | length')
+          if [ "${successes:-0}" -eq 0 ]; then
+            echo "::error::tagged commit $commit has NO successful CI check-runs — refusing to publish without CI evidence" >&2
+            exit 1
+          fi
+          echo "Release gate passed: $commit is on main with $successes green check(s)."
 
       - name: Set reactor version from tag (strip -SNAPSHOT, all modules)
         run: >-

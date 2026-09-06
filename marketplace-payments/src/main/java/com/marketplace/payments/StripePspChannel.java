@@ -65,7 +65,11 @@ class StripePspChannel implements PspChannel {
                                            String idempotencyKey) {
         PaymentIntentCreateParams params = PaymentIntentCreateParams.builder()
                 .setAmount(amountCents)
-                .setCurrency(currency.toLowerCase())
+                // Locale.ROOT: ISO currency codes are ASCII — the default-locale
+                // lowercase turns ILS into "ıls" under a Turkish JVM locale and
+                // Stripe rejects the code (CodeRabbit #241; same rule as
+                // Currencies.normalize / CurrencyExchangeProperties).
+                .setCurrency(currency.toLowerCase(java.util.Locale.ROOT))
                 .putMetadata(MARKETPLACE_INTENT_ID, marketplaceIntentId.toString())
                 .build();
         RequestOptions options = RequestOptions.builder()

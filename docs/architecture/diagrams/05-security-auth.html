@@ -309,7 +309,7 @@
     <div class="section-header">
       <div class="section-icon headers">🛡️</div>
       <div class="section-title">Security HTTP Headers (Spring Security 7)</div>
-      <div class="section-desc">Applied to both SecurityFilterChain (order 3 + 4)</div>
+      <div class="section-desc">Reference hardening targets — Spring Security 7's built-in defaults (frame-deny, nosniff, referrer policy, HSTS on secure requests) apply to all three chains (order 1-3); the explicit CSP / Permissions-Policy directives below are documented targets, not yet configured in SecurityConfig</div>
     </div>
     <div class="grid grid-4">
       <div class="card">
@@ -368,20 +368,20 @@
     <div class="section-header">
       <div class="section-icon keys">🗝️</div>
       <div class="section-title">Key Management &amp; Rotation</div>
-      <div class="section-desc">NIST SP 800-57 compliant • Automatic rotation</div>
+      <div class="section-desc">NIST SP 800-57 cryptoperiod guidance • single persistent key, manual rotation via runbook (ADR-004 Revised — no automatic rotation)</div>
     </div>
     <div class="grid grid-3">
       <div class="card">
         <div class="card-header">
-          <div class="card-name">RotatingJWKSource</div>
+          <div class="card-name">ImmutableJWKSet (implemented)</div>
           <div class="card-badge badge-nist">NIST 800-57</div>
         </div>
         <div class="card-body">
-          Maintains <strong>active + previous</strong> RSA-2048 keys with overlap window.<br>
-          <strong>Rotation:</strong> @Scheduled every 90 days (configurable).<br>
-          During overlap, tokens signed by previous key remain valid until expiry.
+          <strong>Single active key</strong> — no active+previous overlap (ADR-004 Revised: RotatingJWKSource was never implemented).<br>
+          <strong>Rotation:</strong> manual — keytool regeneration + redeploy (runbook: keys/README.md).<br>
+          Replacing the key invalidates outstanding access tokens (900s); persisted refresh tokens run to their 7-day expiry.
         </div>
-        <div class="card-ref">RotatingJWKSource (marketplace-platform-infra)</div>
+        <div class="card-ref">SecurityConfig.jwkSource (marketplace-platform-infra) — ADR-004 Revised</div>
       </div>
 
       <div class="card">
@@ -391,8 +391,8 @@
         </div>
         <div class="card-body">
           <strong>Algorithm:</strong> RSA-2048 (asymmetric).<br>
-          <strong>Storage:</strong> JKS file (<code>$JWT_KEYSTORE_PATH</code>).<br>
-          <strong>Generated via:</strong> keytool (see docs/external-services.md §6).
+          <strong>Storage:</strong> JKS via <code>$JWT_KEYSTORE_PATH</code> (dev, mounted file) or <code>$JWT_KEYSTORE_B64</code> (prod — decoded in memory, no file materialized).<br>
+          <strong>Generated via:</strong> keytool (runbook: keys/README.md).
         </div>
         <div class="card-ref">MarketplaceProperties.Security.Jwt.KeyStore</div>
       </div>

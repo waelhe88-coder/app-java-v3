@@ -60,7 +60,7 @@ class MediaServiceSecurityTest {
         @Bean
         MediaProperties mediaProperties() {
             return new MediaProperties(
-                    new MediaProperties.Storage("", "auto", "", "", ""),
+                    new MediaProperties.Storage("", "auto", "", "", "", false),
                     new MediaProperties.Limits(10_485_760L,
                             Set.of("image/jpeg", "image/png"), Duration.ofMinutes(15)));
         }

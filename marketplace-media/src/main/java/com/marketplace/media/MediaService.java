@@ -15,6 +15,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.Locale;
@@ -89,6 +91,15 @@ public class MediaService {
         ListingPriceProvider.ListingInfo listing = listingPriceProvider.getListingInfo(listingId);
         verifyListingOwnership(listing.providerId(), authentication);
 
+        // Display-position allocation must be atomic per listing (CodeRabbit
+        // #241): countByListingId()+1 inside a transaction does NOT serialize
+        // concurrent transactions — two uploads can read the same count and
+        // persist the same position. The advisory transaction lock below is
+        // held until the surrounding transaction commits, so per-listing
+        // allocations are serialized in the database (hashtextextended maps
+        // the listing UUID text to a single bigint lock key, PG13+).
+        mediaAssetRepository.lockListingPositionAllocation(listingId.toString());
+
         String objectKey = buildObjectKey(listingId, normalizedType);
         MediaAsset asset = mediaAssetRepository.save(MediaAsset.create(
                 listingId, listing.providerId(), objectKey, normalizedType,
@@ -134,9 +145,12 @@ public class MediaService {
     }
 
     /**
-     * Soft-deletes the asset record and best-effort removes the storage object.
-     * A storage-side removal failure is logged, never fatal — bucket lifecycle
-     * rules own orphans.
+     * Soft-deletes the asset record and best-effort removes the storage object
+     * — only AFTER the database delete commits (CodeRabbit #241): the
+     * repository delete is just scheduled until commit, so removing the object
+     * first would leave the row pointing at a vanished object whenever the
+     * transaction rolls back. A storage-side removal failure is logged, never
+     * fatal — bucket lifecycle rules own orphans.
      */
     @Observed(name = "media.asset.delete")
     @PreAuthorize("hasAnyRole('PROVIDER','ADMIN')")
@@ -146,11 +160,26 @@ public class MediaService {
         verifyAssetOwnership(asset, authentication);
 
         mediaAssetRepository.delete(asset);
+        String objectKey = asset.getObjectKey();
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    removeStorageObject(s3, objectKey);
+                }
+            });
+        } else {
+            // No active transaction (unit tests) — remove immediately.
+            removeStorageObject(s3, objectKey);
+        }
+    }
+
+    private void removeStorageObject(S3MediaStorage s3, String objectKey) {
         try {
-            s3.deleteObject(asset.getObjectKey());
+            s3.deleteObject(objectKey);
         } catch (RuntimeException ex) {
             log.warn("Storage object removal failed for key {} (bucket lifecycle will own it): {}",
-                    asset.getObjectKey(), ex.getMessage());
+                    objectKey, ex.getMessage());
         }
     }
 

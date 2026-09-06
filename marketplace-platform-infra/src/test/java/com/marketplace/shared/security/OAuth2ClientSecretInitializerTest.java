@@ -18,6 +18,7 @@ import org.springframework.security.oauth2.server.authorization.settings.TokenSe
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -127,6 +128,38 @@ class OAuth2ClientSecretInitializerTest {
         assertThat(saved.getTokenSettings().getIdTokenSignatureAlgorithm()).isNotNull();
         assertThat(saved.getTokenSettings().getAccessTokenFormat()).isNotNull();
         assertThat(saved.getClientSecret()).isEqualTo("enc");
+    }
+
+    @Test
+    void convergesAfterConcurrentReplicaWonTheBootstrapInsert() {
+        // CodeRabbit #241 (multi-replica bootstrap): JdbcRegisteredClientRepository.save
+        // is check-then-insert, so two replicas booting simultaneously can both
+        // see no row and both insert the same stable CLIENT_ID — the loser's
+        // insert violates the primary key. The loser must reload the winner's
+        // row and converge onto it (a real re-derivation: the winner row here
+        // is legacy-partial), NOT fail startup.
+        when(repository.findByClientId("web")).thenReturn(null, legacyPartialClient("enc"));
+        when(passwordEncoder.encode("raw")).thenReturn("enc");
+        when(passwordEncoder.matches(any(), any())).thenReturn(true);
+        doThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "duplicate key value violates unique constraint \"oauth2_registered_client_pkey\""))
+                .doAnswer(inv -> null)
+                .when(repository).save(any(RegisteredClient.class));
+
+        new OAuth2ClientSecretInitializer(properties("web", "raw"), repository, passwordEncoder, environment(false))
+                .run(null);
+
+        // save #1 = the lost bootstrap insert; save #2 = the convergence update
+        // onto the winner's row.
+        org.mockito.ArgumentCaptor<RegisteredClient> captor =
+                org.mockito.ArgumentCaptor.forClass(RegisteredClient.class);
+        verify(repository, org.mockito.Mockito.times(2)).save(captor.capture());
+        RegisteredClient converged = captor.getAllValues().get(1);
+        assertThat(converged.getTokenSettings().getIdTokenSignatureAlgorithm()).isNotNull();
+        assertThat(converged.getClientSecret()).isEqualTo("enc");
+        assertThat(converged.getAuthorizationGrantTypes())
+                .as("the winner's partial row was re-derived into the complete official definition")
+                .contains(org.springframework.security.oauth2.core.AuthorizationGrantType.CLIENT_CREDENTIALS);
     }
 
     @Test

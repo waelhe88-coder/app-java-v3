@@ -56,6 +56,15 @@ final class S3MediaStorage implements AutoCloseable {
                 AwsBasicCredentials.create(storage.accessKey(), storage.secretKey()));
         var region = Region.of(storage.region());
         var endpoint = URI.create(storage.endpoint());
+        if (!"https".equalsIgnoreCase(endpoint.getScheme()) && !storage.allowInsecureEndpoint()) {
+            // Cleartext S3 endpoints transmit SigV4 credentials and object bytes
+            // unencrypted (CWE-319, CodeRabbit #241). HTTP is an explicit
+            // per-deployment opt-in reserved for local emulators.
+            throw new IllegalStateException(
+                    "marketplace.media.storage.endpoint must use https (got: "
+                            + storage.endpoint() + ") — set marketplace.media.storage.allow-insecure-endpoint=true"
+                            + " only for a local non-production emulator");
+        }
         // Path-style addressing ({endpoint}/{bucket}/{key}) is forced explicitly:
         // the SDK default is virtual-host style (S3Configuration sources,
         // DEFAULT_PATH_STYLE_ACCESS_ENABLED = false), which requires wildcard

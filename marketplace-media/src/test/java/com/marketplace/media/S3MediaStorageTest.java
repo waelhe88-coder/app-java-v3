@@ -15,6 +15,8 @@ import java.net.URI;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
@@ -147,5 +149,40 @@ class S3MediaStorageTest {
 
         verify(presigner).close();
         verify(client).close();
+    }
+
+    private static MediaProperties.Storage storage(String endpoint, boolean allowInsecure) {
+        return new MediaProperties.Storage(endpoint, "auto", BUCKET, "test-access", "test-secret", allowInsecure);
+    }
+
+    @Test
+    void productionConstructor_rejectsCleartextEndpoint() {
+        // CWE-319 / CodeRabbit #241: an http:// endpoint carries SigV4
+        // credentials and object bytes in the clear — the production
+        // constructor must refuse it before any client or presigner is built.
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> new S3MediaStorage(storage("http://localhost:4566", false), Duration.ofMinutes(15)));
+
+        assertTrue(thrown.getMessage().contains("must use https"));
+        assertTrue(thrown.getMessage().contains("http://localhost:4566"));
+    }
+
+    @Test
+    void productionConstructor_acceptsHttpsEndpoint() {
+        // The honest default: https endpoints build normally.
+        try (S3MediaStorage storage = new S3MediaStorage(storage("https://media.example.local", false),
+                Duration.ofMinutes(15))) {
+            assertNotNull(storage);
+        }
+    }
+
+    @Test
+    void productionConstructor_allowsCleartextOnlyWithExplicitOptIn() {
+        // The explicit local-emulator escape hatch (allow-insecure-endpoint)
+        // is the only way an http endpoint builds.
+        try (S3MediaStorage storage = new S3MediaStorage(storage("http://localhost:4566", true),
+                Duration.ofMinutes(15))) {
+            assertNotNull(storage);
+        }
     }
 }

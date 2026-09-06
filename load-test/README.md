@@ -73,14 +73,22 @@ numbers, not changed in code by this layer.
 | 200 rps | 4.91 ms | 1.83 ms | 0 / 12121 | 0 | ✅ |
 | 400 rps | 3.36 ms | 1.36 ms | 0 / 24122 | 0 | ✅ |
 | 800 rps | 20.2 ms | 11.11 ms | 0 / 48084 | 26 | ✅ |
-| **1200 rps** | **117.91 ms** | 72.94 ms | **0 / 71675** | 447 | ✅ **budget holds — the measured ceiling** |
+| **1200 rps** | **117.91 ms** | 72.94 ms | **0 / 71675** | 447 | ⚠️ **qualified — see below** |
 | 1600 rps | 6.59 s | 4.85 s | 0 / 56079 | 40045 (65%) | ❌ p95 budget broken; heavy k6-side starvation on 2 shared cores |
 
-**Measured single-replica ceiling: sustained ~1200 rps on the public read
-surface with p95 ≈ 118 ms, zero HTTP failures** (2 shared cores, 512 MB
-heap, cache-hit steady state, virtual threads). Every served request
-succeeded at every rate — the failure mode at 1600 rps is latency, never
-errors.
+**Sustained-throughput evidence (CodeRabbit #241 qualification): the 1200 rps
+arrival rate was NOT fully sustained — k6 dropped 447 of 72,122 scheduled
+iterations (0.6%) because the load generator shared the same two CPUs as the
+application, so the run cannot separate application capacity from k6-side VU
+starvation.** What the run does prove: **71675 requests were actually served in
+the 60 s window (~1194 rps sustained) with p95 ≈ 118 ms and zero HTTP
+failures**, and every served request succeeded at every rate — the failure
+mode beyond that point is latency, never errors. Treat ~1200 rps as the
+measured single-replica serving floor with the k6-co-location caveat, NOT as
+a clean sustained-arrival ceiling: a replica-capacity decision from a clean
+launch rate needs a rerun with an **isolated load generator**. Until then the
+dashed-iterations budget rule applies: any run that drops iterations is
+reported as qualified (⚠️), never as a plain ceiling.
 
 ### Sustained run (stability proof)
 

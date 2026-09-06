@@ -111,14 +111,17 @@ class ProductionWatchdogFilesTest {
     @Test
     void watchdogIncidentLifecycleIsDeduplicatedAndLeastPrivilege() throws IOException {
         String yml = read(".github/workflows/watchdog.yml");
-        assertThat(yml).as("least privilege: issue creation/commenting is the only "
-                        + "permission the workflow needs (official syntax doc: "
-                        + "'issues: write permits an action to add a comment to an "
-                        + "issue')")
-                .contains("issues: write");
-        assertThat(yml).as("a permissions block must exist at all - without it the "
-                        + "token defaults would be whatever the repo settings say")
-                .contains("permissions:");
+        // CWE-732 / CodeRabbit #241: assert the EXACT permission map, not just
+        // that a block exists — a broader or additional permission would
+        // otherwise pass silently. The freshness probe needs contents: read
+        // (gh api reads of the two repositories' branch state); issue
+        // creation/commenting needs issues: write. Nothing else.
+        java.util.Map<String, String> permissions = parseWorkflowPermissions(yml);
+        assertThat(permissions).as("the workflow-level permissions map").isNotEmpty();
+        assertThat(permissions).as("exactly issues: write + contents: read — least privilege")
+                .containsEntry("issues", "write")
+                .containsEntry("contents", "read")
+                .hasSize(2);
         assertThat(yml).as("overlapping runs are pointless for a periodic prober - "
                         + "the concurrency group serializes them")
                 .contains("group: production-watchdog");
@@ -162,5 +165,35 @@ class ProductionWatchdogFilesTest {
         Path file = repoRoot.resolve(String.join("/", segments));
         assertThat(file).as("%s must exist", file).exists();
         return Files.readString(file);
+    }
+
+    /**
+     * Extracts the workflow-level {@code permissions:} map (column-0 block)
+     * as name-to-value pairs — a line-based parse of the exact YAML shape the
+     * watchdog workflow uses, so ANY extra or broader permission fails the
+     * exact-match assertion (CWE-732, CodeRabbit #241).
+     */
+    private static java.util.Map<String, String> parseWorkflowPermissions(String yml) {
+        java.util.Map<String, String> permissions = new java.util.LinkedHashMap<>();
+        boolean inPermissions = false;
+        for (String line : yml.split("\n", -1)) {
+            if (line.equals("permissions:")) {
+                inPermissions = true;
+                continue;
+            }
+            if (inPermissions) {
+                if (line.isBlank() || line.strip().startsWith("#")) {
+                    continue;
+                }
+                if (!line.startsWith("  ")) {
+                    break; // left the workflow-level block
+                }
+                String[] parts = line.strip().split(":", 2);
+                if (parts.length == 2) {
+                    permissions.put(parts[0].strip(), parts[1].strip());
+                }
+            }
+        }
+        return permissions;
     }
 }

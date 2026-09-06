@@ -27,9 +27,22 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(SpringExtension.class)
-@ContextConfiguration(classes = { PaymentsService.class })
+@ContextConfiguration(classes = { PaymentsService.class, PaymentsServiceSecurityTest.TestConfig.class })
 @EnableMethodSecurity(proxyTargetClass = true)
 class PaymentsServiceSecurityTest {
+
+    /**
+     * The webhook dedup recorder (CodeRabbit #241 hardening) is a real
+     * collaborator of the service: it gets the SAME mocked repository so the
+     * security slice stays a slice.
+     */
+    @org.springframework.context.annotation.Configuration
+    static class TestConfig {
+        @org.springframework.context.annotation.Bean
+        WebhookEventRecorder webhookEventRecorder(PaymentWebhookEventRepository repository) {
+            return new WebhookEventRecorder(repository);
+        }
+    }
 
     @Autowired
     private PaymentsService paymentsService;

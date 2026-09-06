@@ -94,6 +94,16 @@ spring:
     messaging:
       preferred-json-mapper: jackson
 
+  # i18n floor (roadmap B4): the framework's AcceptHeaderLocaleResolver uses
+  # spring.web.locale as the default when a request carries no Accept-Language
+  # — responses stay byte-identical to the pre-B4 English literals. Arabic
+  # resolves via messages_ar.properties on Accept-Language: ar.
+  # Property verified against spring-boot-autoconfigure 4.1.1 configuration
+  # metadata (WebProperties): "spring.web.locale". Previously this key sat
+  # under spring.data.web.locale where no such property exists — it bound
+  # nothing (CodeRabbit #241).
+  web:
+    locale: en
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -101,11 +111,6 @@ spring:
     web:
       pageable:
         max-page-size: 100
-      # i18n floor (roadmap B4): the framework's AcceptHeaderLocaleResolver
-      # uses this as the default when a request carries no Accept-Language —
-      # responses stay byte-identical to the pre-B4 English literals.
-      # Arabic resolves via messages_ar.properties on Accept-Language: ar.
-      locale: en
   mail:
     host: ${MAIL_HOST:}
     port: ${MAIL_PORT:587}
@@ -119,7 +124,11 @@ spring:
       mail.smtp.writetimeout: 5000
   cache:
     type: ${CACHE_TYPE:redis}
-    cache-names: catalog-active,catalog-by-category,catalog-search,pricing-calculations,search-results,availability,bookings,users,userSubjects,conversations,paymentIntents,reviews,providers
+    # The four *-v2 names are the ListingSummary serialization-schema
+    # namespaces (CodeRabbit #241) — bumped with every ListingSummary record
+    # component change so stale pre-change entries are never read. See
+    # CatalogService.CATALOG_CACHE_NAMES.
+    cache-names: catalog-active-v2,catalog-by-category-v2,catalog-search-v2,pricing-calculations,search-results-v2,availability,bookings,users,userSubjects,conversations,paymentIntents,reviews,providers
     redis:
       # Entry TTL — the framework's own expiration channel for cache entries.
       # Evidence: spring-configuration-metadata.json of spring-boot-cache

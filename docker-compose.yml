@@ -9,7 +9,11 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18 moved the cluster to /var/lib/postgresql/18/docker and
+      # declares /var/lib/postgresql as its volume (CodeRabbit #241): mounting
+      # at the old PG<=17 path /var/lib/postgresql/data persisted NOTHING.
+      # The named volume now covers the versioned data root.
+      - pgdata18:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U marketplace"]
       interval: 5s
@@ -28,4 +32,4 @@ services:
       retries: 5
 
 volumes:
-  pgdata:
+  pgdata18:

@@ -22,20 +22,26 @@ import java.util.List;
  */
 @ConfigurationProperties(prefix = "marketplace")
 public record MarketplaceProperties(
-    Cors cors,
-    Security security
+    // Every nested section that production code dereferences is primed with
+    // an empty @DefaultValue (the house rule stated in this file's javadoc):
+    // constructor binding binds an absent section to null, and
+    // SecurityConfig dereferences security().jwt().keystore() /
+    // security().session().maxSessions() unconditionally (CodeRabbit #241
+    // flagged exactly this gap — only OAuth2 was primed before).
+    @DefaultValue Cors cors,
+    @DefaultValue Security security
 ) {
     public record Cors(
         @DefaultValue("https://marketplace.com") List<String> allowedOrigins
     ) {}
 
     public record Security(
-        Jwt jwt,
-        Session session,
+        @DefaultValue Jwt jwt,
+        @DefaultValue Session session,
         @DefaultValue OAuth2 oauth2
     ) {
         public record Jwt(
-            KeyStore keystore,
+            @DefaultValue KeyStore keystore,
             @DefaultValue("marketplace-api") String audience
         ) {
             /**
